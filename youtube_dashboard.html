@@ -108,6 +108,45 @@
   .kcard .title[contenteditable="true"] { outline: 1px solid var(--accent); border-radius: 4px; padding: 0 2px; cursor: text; }
   .kcard .actions { display: flex; align-items: center; gap: 2px; margin-top: 6px; }
   .kcard .actions .spacer { flex: 1; }
+  .kcard .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .kcard .actions button.small { padding: 2px 8px; color: var(--muted); border-color: var(--border); }
+  .kcard .actions button.small:hover { color: var(--text); }
+
+  /* Script editor */
+  dialog.editor { width: min(1240px, calc(100vw - 24px)); height: calc(100vh - 24px); max-width: none; max-height: none; padding: 0; overflow: hidden; }
+  dialog.editor[open] { display: flex; flex-direction: column; }
+  .ed-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .ed-head .ed-title { flex: 1 1 280px; font-size: 18px; font-weight: 650; background: transparent; border-color: transparent; padding: 6px 8px; }
+  .ed-head .ed-title:hover { border-color: var(--border); }
+  .ed-head .ed-stats { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ed-head .ed-saved { color: var(--faint); font-size: 12px; min-width: 52px; }
+  .ed-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 270px; }
+  .ed-body textarea.script { width: 100%; height: 100%; resize: none; border: none; border-radius: 0; background: var(--bg); padding: 28px clamp(18px, 5vw, 64px); font-size: 16px; line-height: 1.75; }
+  .ed-body textarea.script:focus { box-shadow: none; }
+  .ed-side { border-left: 1px solid var(--border); padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 18px; }
+  .ed-side h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+  .outline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .outline button { width: 100%; display: flex; justify-content: space-between; gap: 8px; text-align: left; background: transparent; border-color: transparent; padding: 6px 8px; font-size: 13px; }
+  .outline button:hover { background: var(--surface-2); border-color: var(--border); }
+  .outline .t { color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ed-side .hint p { margin: 0 0 6px; }
+  .ed-side label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
+  .ed-side label input { width: 80px; }
+  .mirror { position: absolute; visibility: hidden; white-space: pre-wrap; word-wrap: break-word; overflow: hidden; top: 0; left: -9999px; }
+  @media (max-width: 760px) { .ed-body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; } .ed-side { border-left: none; border-top: 1px solid var(--border); max-height: 34vh; } }
+
+  /* Read mode (teleprompter) */
+  .reader { position: absolute; inset: 0; background: var(--bg); display: none; flex-direction: column; z-index: 2; }
+  .reader.on { display: flex; }
+  .reader-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .reader-bar label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .reader-bar input[type="range"] { width: 140px; accent-color: var(--accent); padding: 0; }
+  .reader-scroll { flex: 1; overflow: auto; scroll-behavior: auto; }
+  .reader-text { max-width: 940px; margin: 0 auto; padding: 40vh 24px 70vh; font-size: var(--fs, 36px); line-height: 1.5; font-weight: 500; }
+  .reader-text p { margin: 0 0 .2em; min-height: .6em; }
+  .reader-text h4 { font-size: .45em; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin: 1.6em 0 .4em; }
+  .reader-text .cue { color: var(--faint); font-size: .6em; font-style: italic; }
+  .reader-guide { position: absolute; left: 0; right: 0; top: 40%; height: 0; border-top: 1px dashed rgba(255,107,91,.35); pointer-events: none; }
   .empty { color: var(--faint); font-size: 12px; text-align: center; padding: 14px 4px; border: 1px dashed var(--border); border-radius: 8px; }
   .add-card { margin-top: auto; }
   .add-card input { width: 100%; font-size: 13px; padding: 7px 9px; background: var(--surface); }
@@ -253,6 +292,51 @@
   </div>
 </div>
 
+<!-- Script editor -->
+<dialog class="editor" id="editor">
+  <div class="ed-head">
+    <input class="ed-title" id="edTitle" aria-label="Video title" autocomplete="off">
+    <select id="edStage" aria-label="Pipeline stage"></select>
+    <span class="ed-stats" id="edStats"></span>
+    <span class="ed-saved" id="edSaved"></span>
+    <button class="small" id="edTemplate" title="Insert a section template">Template</button>
+    <button class="small primary" id="edRead" title="Full-screen read mode for recording">Read mode</button>
+    <button class="small ghost" id="edClose" title="Close (Esc)">Done</button>
+  </div>
+  <div class="ed-body">
+    <textarea class="script" id="edText" spellcheck="true" placeholder="Start writing, or click Template for a starting structure.&#10;&#10;## Section headings build the outline on the right&#10;[Gameplay or B-roll cues in square brackets]&#10;(Notes to yourself in parentheses)&#10;&#10;Cues, notes and headings aren't counted as spoken words."></textarea>
+    <aside class="ed-side">
+      <div>
+        <h4>Outline</h4>
+        <ul class="outline" id="edOutline"></ul>
+      </div>
+      <div>
+        <h4>Runtime</h4>
+        <label>Speaking pace (words/min) <input type="number" id="edWpm" min="80" max="260" step="5"></label>
+      </div>
+      <div class="hint">
+        <h4>Formatting</h4>
+        <p><code>## Hook</code> starts a section</p>
+        <p><code>[gameplay: boss fight]</code> visual cue</p>
+        <p><code>(say this slower)</code> note to self</p>
+        <p>Ctrl+S saves right away. Everything also saves as you type.</p>
+      </div>
+    </aside>
+  </div>
+  <div class="reader" id="reader">
+    <div class="reader-bar">
+      <button class="small primary" id="rdPlay">Start scrolling</button>
+      <label>Speed <input type="range" id="rdSpeed" min="10" max="160" step="5"></label>
+      <label>Size <button class="small" id="rdSmaller" aria-label="Smaller text">A−</button><button class="small" id="rdBigger" aria-label="Bigger text">A+</button></label>
+      <span class="hint">Space to start or pause · ↑↓ to nudge · Esc to exit</span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="small ghost" id="rdExit">Exit read mode</button>
+    </div>
+    <div class="reader-scroll" id="rdScroll"><div class="reader-text" id="rdText"></div></div>
+    <div class="reader-guide"></div>
+  </div>
+</dialog>
+
 <!-- Google Drive sync dialog -->
 <dialog id="syncDialog">
   <h3>Google Drive sync</h3>
@@ -381,10 +465,12 @@
         el.style.setProperty('--c', stage.color);
         el.innerHTML = `
           <div class="title">${esc(c.title)}</div>
+          ${scriptMeta(c)}
           <div class="actions">
             <button class="icon" data-act="left" title="Move back" ${si === 0 ? 'disabled' : ''}>←</button>
             <button class="icon" data-act="right" title="Move forward" ${si === STAGES.length - 1 ? 'disabled' : ''}>→</button>
             <span class="spacer"></span>
+            <button class="small ghost" data-act="script" title="Write the script">Script</button>
             <button class="icon" data-act="edit" title="Rename">✎</button>
             <button class="icon del" data-act="del" title="Delete">✕</button>
           </div>`;
@@ -412,7 +498,8 @@
           if (act === 'left' || act === 'right') {
             const ni = si + (act === 'left' ? -1 : 1);
             if (ni >= 0 && ni < STAGES.length) { c.stage = STAGES[ni].id; save(); renderBoard(); renderKpis(); }
-          } else if (act === 'edit') startEdit();
+          } else if (act === 'script') Editor.open(c.id);
+          else if (act === 'edit') startEdit();
           else if (act === 'del') {
             if (confirm(`Delete "${c.title}"?`)) { state.pipeline = state.pipeline.filter(x => x.id !== c.id); save(); renderBoard(); renderKpis(); }
           }
@@ -591,7 +678,221 @@
   });
   function renderNotes() { if (document.activeElement !== $('notes')) $('notes').value = state.notes; }
 
-  function renderAll() { renderKpis(); renderBoard(); renderSchedule(); renderIdeas(); renderStats(); renderNotes(); }
+  /* ---------- Script editor ---------- */
+  const SCRIPT_TEMPLATE = `## Hook
+(First 15 seconds: the promise. Why should they keep watching?)
+
+## Intro
+(Who you are, what game this is, what money topic it ties into.)
+
+## Point 1
+[Gameplay: ]
+
+
+## Point 2
+[Gameplay: ]
+
+
+## Point 3
+[Gameplay: ]
+
+
+## Takeaway
+(The one thing viewers should do or remember.)
+
+## Outro
+(Subscribe ask + tease the next video.)
+`;
+  const isHeading = line => /^\s*#/.test(line);
+  // Spoken words only: skips ## headings, [cues] and (notes).
+  function countWords(text) {
+    const spoken = text.split('\n').filter(l => !isHeading(l)).join('\n')
+      .replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ');
+    return (spoken.match(/\S+/g) || []).filter(w => /[\p{L}\p{N}]/u.test(w)).length;
+  }
+  const wpm = () => Math.min(260, Math.max(80, Number(state.scriptWpm) || 150));
+  function fmtDur(words) {
+    const secs = Math.round(words / wpm() * 60);
+    return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  }
+  function scriptMeta(c) {
+    const words = c.script ? countWords(c.script) : 0;
+    return words ? `<div class="meta">Script · ${fmtNum(words)} words · ~${fmtDur(words)}</div>` : '';
+  }
+  function sections(text) {
+    const out = [];
+    let cur = { name: 'Opening', index: 0, body: [] };
+    let pos = 0;
+    for (const line of text.split('\n')) {
+      if (isHeading(line)) {
+        if (cur.body.join('').trim() || out.length || cur.name !== 'Opening') out.push(cur);
+        cur = { name: line.replace(/^\s*#+\s*/, '') || 'Untitled', index: pos, body: [] };
+      } else cur.body.push(line);
+      pos += line.length + 1;
+    }
+    if (cur.body.join('').trim() || cur.name !== 'Opening') out.push(cur);
+    return out.map(s => ({ ...s, words: countWords(s.body.join('\n')) }));
+  }
+  function readerHtml(text) {
+    const cue = s => s.replace(/(\[[^\]]*\]|\([^)]*\))/g, '<span class="cue">$1</span>');
+    return text.split('\n').map(l => isHeading(l)
+      ? `<h4>${esc(l.replace(/^\s*#+\s*/, ''))}</h4>`
+      : `<p>${cue(esc(l)) || '&nbsp;'}</p>`).join('');
+  }
+
+  const Editor = (() => {
+    const dlg = $('editor'), ta = $('edText');
+    let cardId = null, timer = null, dirty = false, mirror = null;
+    const card = () => state.pipeline.find(c => c.id === cardId);
+
+    $('edStage').innerHTML = STAGES.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+
+    function updateStats() {
+      const text = ta.value, words = countWords(text);
+      $('edStats').textContent = `${fmtNum(words)} words · ~${fmtDur(words)}`;
+      const secs = sections(text);
+      $('edOutline').innerHTML = secs.length
+        ? secs.map((s, i) => `<li><button data-i="${i}" data-idx="${s.index}"><span>${esc(s.name)}</span><span class="t">${s.words ? fmtDur(s.words) : '–'}</span></button></li>`).join('')
+        : `<li class="hint">Add <code>## Section</code> lines to build an outline.</li>`;
+    }
+    function flush() {
+      clearTimeout(timer);
+      if (!dirty) return;
+      dirty = false;
+      const c = card(); if (!c) return;
+      c.script = ta.value;
+      const t = $('edTitle').value.trim();
+      if (t) c.title = t;
+      save();
+      $('edSaved').textContent = 'Saved';
+    }
+    function queue() {
+      dirty = true;
+      $('edSaved').textContent = 'Saving…';
+      clearTimeout(timer); timer = setTimeout(flush, 500);
+    }
+    function jumpTo(idx) {
+      // Measure where the heading sits (wrapped lines included) and scroll there.
+      if (!mirror) { mirror = document.createElement('div'); mirror.className = 'mirror'; document.body.appendChild(mirror); }
+      const cs = getComputedStyle(ta);
+      for (const p of ['fontSize', 'fontFamily', 'lineHeight', 'paddingLeft', 'paddingRight', 'letterSpacing']) mirror.style[p] = cs[p];
+      mirror.style.width = ta.clientWidth + 'px';
+      mirror.textContent = ta.value.slice(0, idx) + '.';
+      ta.focus();
+      ta.setSelectionRange(idx, idx);
+      ta.scrollTop = Math.max(0, mirror.scrollHeight - parseFloat(cs.lineHeight) * 2);
+    }
+
+    ta.addEventListener('input', () => { updateStats(); queue(); });
+    $('edTitle').addEventListener('input', queue);
+    $('edStage').addEventListener('change', e => {
+      const c = card(); if (!c) return;
+      c.stage = e.target.value; save(); renderBoard(); renderKpis();
+      toast(`Moved to ${STAGES.find(s => s.id === c.stage).name}`);
+    });
+    $('edWpm').addEventListener('change', e => {
+      state.scriptWpm = Math.min(260, Math.max(80, Number(e.target.value) || 150));
+      e.target.value = state.scriptWpm; save(); updateStats();
+    });
+    $('edOutline').addEventListener('click', e => {
+      const b = e.target.closest('button'); if (b) jumpTo(Number(b.dataset.idx));
+    });
+    $('edTemplate').addEventListener('click', () => {
+      const empty = !ta.value.trim();
+      if (!empty && !confirm('Add the section template to the end of this script?')) return;
+      const insert = empty ? SCRIPT_TEMPLATE : '\n\n' + SCRIPT_TEMPLATE;
+      ta.focus();
+      if (empty) ta.select(); else ta.setSelectionRange(ta.value.length, ta.value.length);
+      // execCommand keeps Ctrl+Z working; fall back if the browser refuses.
+      if (!document.execCommand('insertText', false, insert)) { ta.setRangeText(insert, ta.selectionStart, ta.selectionEnd, 'end'); }
+      updateStats(); queue();
+    });
+    ta.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); flush(); toast('Script saved'); }
+    });
+    $('edClose').addEventListener('click', () => dlg.close());
+    dlg.addEventListener('cancel', e => { if (Reader.isOn()) { e.preventDefault(); Reader.close(); } });
+    dlg.addEventListener('close', () => { flush(); Reader.close(); cardId = null; renderBoard(); });
+    window.addEventListener('beforeunload', flush);
+
+    /* Read mode */
+    const Reader = (() => {
+      const box = $('reader'), sc = $('rdScroll');
+      let playing = false, last = 0, carry = 0;
+      const prefs = () => { state.reader = Object.assign({ speed: 45, size: 36 }, state.reader || {}); return state.reader; };
+      function apply() { const p = prefs(); $('rdText').style.setProperty('--fs', p.size + 'px'); $('rdSpeed').value = p.speed; }
+      function tick(t) {
+        if (!playing) return;
+        if (last) {
+          carry += prefs().speed * (t - last) / 1000;
+          const px = Math.floor(carry);
+          if (px) { sc.scrollTop += px; carry -= px; }
+          if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 1) { setPlaying(false); return; }
+        }
+        last = t; requestAnimationFrame(tick);
+      }
+      function setPlaying(on) {
+        playing = on; last = 0; carry = 0;
+        $('rdPlay').textContent = on ? 'Pause' : 'Start scrolling';
+        if (on) requestAnimationFrame(tick);
+      }
+      $('rdPlay').addEventListener('click', () => setPlaying(!playing));
+      $('rdSpeed').addEventListener('input', e => { prefs().speed = Number(e.target.value); });
+      $('rdSpeed').addEventListener('change', save);
+      const resize = d => { const p = prefs(); p.size = Math.min(72, Math.max(20, p.size + d)); apply(); save(); };
+      $('rdSmaller').addEventListener('click', () => resize(-4));
+      $('rdBigger').addEventListener('click', () => resize(4));
+      $('rdExit').addEventListener('click', () => close());
+      box.addEventListener('keydown', e => {
+        if (e.target.tagName === 'INPUT') return;
+        if (e.key === ' ') { e.preventDefault(); setPlaying(!playing); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); sc.scrollTop += 60; }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); sc.scrollTop -= 60; }
+      });
+      function close() { setPlaying(false); box.classList.remove('on'); if (dlg.open) ta.focus(); }
+      return {
+        open() {
+          flush(); apply();
+          $('rdText').innerHTML = ta.value.trim() ? readerHtml(ta.value) : '<p class="cue">Nothing to read yet.</p>';
+          box.classList.add('on'); box.tabIndex = -1; box.focus(); sc.scrollTop = 0;
+        },
+        close,
+        isOn: () => box.classList.contains('on'),
+      };
+    })();
+    $('edRead').addEventListener('click', () => Reader.open());
+
+    return {
+      open(id) {
+        cardId = id;
+        const c = card(); if (!c) return;
+        $('edTitle').value = c.title;
+        $('edStage').value = c.stage;
+        $('edWpm').value = wpm();
+        ta.value = c.script || '';
+        $('edSaved').textContent = '';
+        updateStats();
+        dlg.showModal();
+        ta.focus(); ta.setSelectionRange(0, 0); ta.scrollTop = 0;
+      },
+      // Called after data arrives from another computer.
+      refresh() {
+        if (!dlg.open) return;
+        const c = card();
+        if (!c) { dirty = false; dlg.close(); toast('This video was deleted on another computer'); return; }
+        if (dirty) return; // unsaved typing here wins; it saves next
+        $('edStage').value = c.stage;
+        if (document.activeElement !== $('edTitle')) $('edTitle').value = c.title;
+        if ((c.script || '') !== ta.value) {
+          const pos = ta.selectionStart;
+          ta.value = c.script || ''; ta.setSelectionRange(pos, pos);
+          updateStats(); toast('Script updated from another computer');
+        }
+      },
+    };
+  })();
+
+  function renderAll() { renderKpis(); renderBoard(); renderSchedule(); renderIdeas(); renderStats(); renderNotes(); Editor.refresh(); }
 
   /* ---------- Export / Import ---------- */
   $('exportBtn').addEventListener('click', () => {
