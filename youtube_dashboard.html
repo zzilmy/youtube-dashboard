@@ -927,14 +927,15 @@
   const Sync = (() => {
     const CFG_KEY = 'ytDashboard.sync';
     const FILE_NAME = 'youtube_dashboard_data.json';
+    // Google refuses Drive and YouTube scopes in the same sign-in, so each gets its own token.
+    const DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file'];
     const YT_SCOPES = ['https://www.googleapis.com/auth/youtube.readonly', 'https://www.googleapis.com/auth/yt-analytics.readonly'];
-    const SCOPE = ['https://www.googleapis.com/auth/drive.file', ...YT_SCOPES].join(' ');
     const API = 'https://www.googleapis.com/drive/v3/files';
     const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
     // lastFileStamp = the Drive copy's updatedAt as of this browser's last sync.
     let cfg = { clientId: '', enabled: false, fileId: '', lastFileStamp: 0 };
     try { Object.assign(cfg, JSON.parse(localStorage.getItem(CFG_KEY)) || {}); } catch {}
-    let token = null, tokenExp = 0, grantedScopes = '', gisPromise = null, connected = false;
+    let gisPromise = null, connected = false;
     let writeTimer = null, pendingWrite = false, lastSync = 0;
     let chain = Promise.resolve();
     const serial = fn => (chain = chain.then(fn, fn));
@@ -942,7 +943,6 @@
     const saveCfg = () => { try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch {} };
     const setStamp = v => { cfg.lastFileStamp = v; saveCfg(); };
     const clientId = () => GOOGLE_CLIENT_ID || cfg.clientId;
-    const tokenValid = () => token && Date.now() < tokenExp;
 
     function setStatus(kind, text) {
       $('syncPill').className = 'pill ' + (kind || '');
@@ -964,27 +964,35 @@
         document.head.appendChild(s);
       });
     }
-    function getToken() {
-      return new Promise((res, rej) => {
+    // One access token per set of scopes. Each lasts about an hour.
+    function tokenSlot(scopes) {
+      const t = { value: null, exp: 0, granted: '' };
+      t.valid = () => !!t.value && Date.now() < t.exp;
+      t.hasAll = () => t.valid() && scopes.every(s => t.granted.includes(s));
+      t.request = () => new Promise((res, rej) => {
         const client = google.accounts.oauth2.initTokenClient({
           client_id: clientId(),
-          scope: SCOPE,
+          scope: scopes.join(' '),
+          include_granted_scopes: false, // don't fold the other token's scopes back in
           callback: r => {
             if (r.error) return rej(new Error(r.error_description || r.error));
-            token = r.access_token;
-            tokenExp = Date.now() + (Number(r.expires_in) - 120) * 1000;
-            grantedScopes = r.scope || '';
+            t.value = r.access_token;
+            t.exp = Date.now() + (Number(r.expires_in) - 120) * 1000;
+            t.granted = r.scope || '';
             res();
           },
           error_callback: e => rej(new Error(e.type === 'popup_closed' ? 'Sign-in window was closed.' : e.type === 'popup_failed_to_open' ? 'Sign-in popup was blocked. Allow popups for this site and try again.' : (e.message || 'Sign-in failed.'))),
         });
         client.requestAccessToken({ prompt: '' });
       });
+      return t;
     }
+    const drive = tokenSlot(DRIVE_SCOPES), yt = tokenSlot(YT_SCOPES);
+    const tokenValid = drive.valid;
 
-    async function api(url, opts = {}) {
-      const r = await fetch(url, { ...opts, headers: { Authorization: 'Bearer ' + token, ...(opts.headers || {}) } });
-      if (r.status === 401) { token = null; throw Object.assign(new Error('Google session expired.'), { auth: true }); }
+    async function api(url, opts = {}, slot = drive) {
+      const r = await fetch(url, { ...opts, headers: { Authorization: 'Bearer ' + slot.value, ...(opts.headers || {}) } });
+      if (r.status === 401) { slot.value = null; throw Object.assign(new Error('Google session expired.'), { auth: true }); }
       if (!r.ok) {
         let message = `Google error ${r.status}`, reason = '';
         try {
@@ -1058,7 +1066,7 @@
       setStatus('', 'Connecting to Google Drive…');
       try {
         await loadGis();
-        if (!tokenValid() || !YT_SCOPES.every(s => grantedScopes.includes(s))) await getToken();
+        if (!drive.hasAll()) await drive.request();
         await serial(async () => {
           cfg.fileId = await findFile();
           cfg.enabled = true; saveCfg();
@@ -1092,10 +1100,17 @@
 
     return {
       clientId,
-      youtubeGranted: () => tokenValid() && YT_SCOPES.every(s => grantedScopes.includes(s)),
+      youtubeGranted: yt.hasAll,
+      // Separate sign-in for YouTube. Must run from a click (the browser only allows the popup then).
+      async connectYouTube() {
+        if (!clientId() || location.protocol === 'file:') { openSyncDialog(); throw new Error('Set up Google sign-in first (Drive sync dialog).'); }
+        await loadGis();
+        await yt.request();
+        if (!yt.hasAll()) throw new Error('YouTube access wasn\'t allowed. Click Refresh stats and tick the YouTube boxes when Google asks.');
+      },
       async getJson(url) {
-        if (!tokenValid()) throw Object.assign(new Error('Google session expired.'), { auth: true });
-        return (await api(url)).json();
+        if (!yt.valid()) throw Object.assign(new Error('Google session expired.'), { auth: true });
+        return (await api(url, {}, yt)).json();
       },
       setClientId(id) { cfg.clientId = id; saveCfg(); },
       isEnabled: () => cfg.enabled,
@@ -1129,16 +1144,17 @@
         YT.pull(); // picks up a new day if the tab stayed open overnight
       },
       disconnect() {
-        if (token && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(token, () => {});
-        token = null; connected = false; pendingWrite = false;
+        if (drive.value && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(drive.value, () => {});
+        drive.value = null; connected = false; pendingWrite = false;
         cfg.enabled = false; cfg.fileId = ''; saveCfg();
         setStatus('', 'Saved in this browser'); toast('Google Drive sync turned off');
       },
       init() {
+        // Preload sign-in so the popup opens straight from a click (Refresh stats works without Drive too).
+        if (clientId() && location.protocol !== 'file:') loadGis().catch(() => {});
         if (!cfg.enabled) { setStatus('', 'Saved in this browser'); return; }
         // Browsers only allow the Google sign-in popup after a click, so ask for one.
         setStatus('warn', 'Click Connect Drive to sync');
-        if (location.protocol !== 'file:') loadGis().catch(() => {});
       },
     };
   })();
@@ -1228,12 +1244,10 @@
     }
 
     async function pull({ force = false } = {}) {
-      if (busy || !Sync.isConnected()) return;
+      if (busy) return;
       if (!force && info().lastPull === todayStr()) return;
-      if (!Sync.youtubeGranted()) {
-        lastError = 'YouTube access wasn\'t allowed. Click Refresh stats and tick the YouTube boxes when Google asks.';
-        render(); return;
-      }
+      // No YouTube sign-in in this tab (or it expired): wait for a Refresh stats click.
+      if (!Sync.youtubeGranted()) { render(); return; }
       busy = true; lastError = ''; render();
       try {
         let channel;
@@ -1262,14 +1276,18 @@
       else if (y.lastPullAt) {
         const d = new Date(y.lastPullAt);
         const when = toDateStr(d) === todayStr() ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : fmtDate(toDateStr(d), { month: 'short', day: 'numeric' });
-        $('ytInfo').textContent = `Auto from YouTube · ${y.title || 'your channel'} · updated ${when}`;
-      } else $('ytInfo').textContent = 'Stats can update automatically from YouTube';
+        const stale = y.lastPull !== todayStr() && !Sync.youtubeGranted() ? ' · click Refresh stats for today' : '';
+        $('ytInfo').textContent = `Auto from YouTube · ${y.title || 'your channel'} · updated ${when}${stale}`;
+      } else $('ytInfo').textContent = 'Click Refresh stats to pull stats from YouTube';
       $('ytNote').textContent = lastError;
       $('ytNote').style.display = lastError ? '' : 'none';
     }
 
     $('ytRefresh').addEventListener('click', async () => {
-      if (!Sync.isConnected() || !Sync.youtubeGranted()) await Sync.connect();
+      if (!Sync.youtubeGranted()) {
+        try { await Sync.connectYouTube(); }
+        catch (e) { lastError = e.message; render(); return; }
+      }
       pull({ force: true });
     });
 
