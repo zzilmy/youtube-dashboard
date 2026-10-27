@@ -172,6 +172,9 @@
   td .delta { font-size: 11px; margin-left: 6px; color: var(--posted); }
   td .delta.neg { color: var(--danger); }
   .table-wrap { max-height: 320px; overflow: auto; }
+  .yt-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; text-align: right; }
+  .yt-note { border: 1px solid rgba(245,183,72,.35); background: rgba(245,183,72,.08); color: var(--scripted); border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
+  .src { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }
 
   /* Dialog */
   dialog { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); max-width: 560px; padding: 22px; }
@@ -266,7 +269,11 @@
 
     <!-- Stats -->
     <section class="card span-8">
-      <div class="card-head"><h2>Channel stats</h2><span class="hint">Subscriber growth</span></div>
+      <div class="card-head">
+        <h2>Channel stats</h2>
+        <span class="yt-bar"><span class="hint" id="ytInfo"></span><button class="small" id="ytRefresh">Refresh stats</button></span>
+      </div>
+      <div class="yt-note" id="ytNote" style="display:none"></div>
       <form class="stats-form" id="statsForm">
         <input type="date" id="sDate" required>
         <input type="number" id="sSubs" min="0" placeholder="Subscribers" required>
@@ -607,7 +614,8 @@
       const prev = rows[idx + 1];
       const d = prev ? r.subs - prev.subs : null;
       const delta = d === null || d === 0 ? '' : `<span class="delta ${d < 0 ? 'neg' : ''}">${d > 0 ? '+' : ''}${fmtNum(d)}</span>`;
-      return `<tr><td>${fmtDate(r.date, { month: 'short', day: 'numeric', year: 'numeric' })}</td><td>${fmtNum(r.subs)}${delta}</td><td>${fmtNum(r.views)}</td><td>${fmtNum(r.videos)}</td><td style="width:1%"><button class="icon del" data-id="${r.id}" title="Delete entry">✕</button></td></tr>`;
+      const auto = r.source === 'youtube' || r.source === 'analytics';
+      return `<tr><td>${fmtDate(r.date, { month: 'short', day: 'numeric', year: 'numeric' })}${auto ? '<span class="src" title="Pulled from YouTube">auto</span>' : ''}</td><td>${fmtNum(r.subs)}${delta}</td><td>${fmtNum(r.views)}</td><td>${fmtNum(r.videos)}</td><td style="width:1%"><button class="icon del" data-id="${r.id}" title="Delete entry">✕</button></td></tr>`;
     }).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--faint);padding:16px">No entries yet. Log your first numbers above.</td></tr>`;
     renderChart(sorted);
   }
@@ -640,7 +648,7 @@
       const anchor = data.length === 1 ? 'middle' : i === 0 ? 'start' : i === data.length - 1 ? 'end' : 'middle';
       return `<text x="${x(data[i])}" y="${H - 8}" fill="#5c6375" font-size="11" text-anchor="${anchor}">${fmtDate(data[i].date, { month: 'short', day: 'numeric' })}</text>`;
     }).join('');
-    const dots = data.map(d => `<circle cx="${x(d)}" cy="${y(d.subs)}" r="3.5" fill="#0e1014" stroke="#ff6b5b" stroke-width="2"><title>${fmtDate(d.date, { month: 'short', day: 'numeric', year: 'numeric' })}: ${fmtNum(d.subs)} subscribers</title></circle>`).join('');
+    const dots = data.length > 60 ? '' : data.map(d => `<circle cx="${x(d)}" cy="${y(d.subs)}" r="3.5" fill="#0e1014" stroke="#ff6b5b" stroke-width="2"><title>${fmtDate(d.date, { month: 'short', day: 'numeric', year: 'numeric' })}: ${fmtNum(d.subs)} subscribers</title></circle>`).join('');
     box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Subscriber growth chart">
       <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#ff6b5b" stop-opacity=".28"/><stop offset="1" stop-color="#ff6b5b" stop-opacity="0"/></linearGradient></defs>
       ${grid}
@@ -651,7 +659,7 @@
   $('sDate').value = todayStr();
   $('statsForm').addEventListener('submit', e => {
     e.preventDefault();
-    const entry = { id: uid(), date: $('sDate').value, subs: +$('sSubs').value, views: +$('sViews').value, videos: +$('sVideos').value };
+    const entry = { id: uid(), date: $('sDate').value, subs: +$('sSubs').value, views: +$('sViews').value, videos: +$('sVideos').value, source: 'manual' };
     if (!entry.date) return;
     const existing = state.stats.find(s => s.date === entry.date);
     if (existing) {
@@ -892,7 +900,7 @@
     };
   })();
 
-  function renderAll() { renderKpis(); renderBoard(); renderSchedule(); renderIdeas(); renderStats(); renderNotes(); Editor.refresh(); }
+  function renderAll() { renderKpis(); renderBoard(); renderSchedule(); renderIdeas(); renderStats(); renderNotes(); Editor.refresh(); YT.render(); }
 
   /* ---------- Export / Import ---------- */
   $('exportBtn').addEventListener('click', () => {
@@ -919,13 +927,14 @@
   const Sync = (() => {
     const CFG_KEY = 'ytDashboard.sync';
     const FILE_NAME = 'youtube_dashboard_data.json';
-    const SCOPE = 'https://www.googleapis.com/auth/drive.file';
+    const YT_SCOPES = ['https://www.googleapis.com/auth/youtube.readonly', 'https://www.googleapis.com/auth/yt-analytics.readonly'];
+    const SCOPE = ['https://www.googleapis.com/auth/drive.file', ...YT_SCOPES].join(' ');
     const API = 'https://www.googleapis.com/drive/v3/files';
     const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
     // lastFileStamp = the Drive copy's updatedAt as of this browser's last sync.
     let cfg = { clientId: '', enabled: false, fileId: '', lastFileStamp: 0 };
     try { Object.assign(cfg, JSON.parse(localStorage.getItem(CFG_KEY)) || {}); } catch {}
-    let token = null, tokenExp = 0, gisPromise = null, connected = false;
+    let token = null, tokenExp = 0, grantedScopes = '', gisPromise = null, connected = false;
     let writeTimer = null, pendingWrite = false, lastSync = 0;
     let chain = Promise.resolve();
     const serial = fn => (chain = chain.then(fn, fn));
@@ -964,6 +973,7 @@
             if (r.error) return rej(new Error(r.error_description || r.error));
             token = r.access_token;
             tokenExp = Date.now() + (Number(r.expires_in) - 120) * 1000;
+            grantedScopes = r.scope || '';
             res();
           },
           error_callback: e => rej(new Error(e.type === 'popup_closed' ? 'Sign-in window was closed.' : e.type === 'popup_failed_to_open' ? 'Sign-in popup was blocked. Allow popups for this site and try again.' : (e.message || 'Sign-in failed.'))),
@@ -975,7 +985,15 @@
     async function api(url, opts = {}) {
       const r = await fetch(url, { ...opts, headers: { Authorization: 'Bearer ' + token, ...(opts.headers || {}) } });
       if (r.status === 401) { token = null; throw Object.assign(new Error('Google session expired.'), { auth: true }); }
-      if (!r.ok) throw Object.assign(new Error(`Google Drive error ${r.status}`), { status: r.status });
+      if (!r.ok) {
+        let message = `Google error ${r.status}`, reason = '';
+        try {
+          const err = JSON.parse(await r.text()).error || {};
+          message = err.message || message;
+          reason = err.errors?.[0]?.reason || err.details?.find(d => d.reason)?.reason || err.status || '';
+        } catch {}
+        throw Object.assign(new Error(message), { status: r.status, reason });
+      }
       return r;
     }
     async function findFile() {
@@ -1040,13 +1058,14 @@
       setStatus('', 'Connecting to Google Drive…');
       try {
         await loadGis();
-        if (!tokenValid()) await getToken();
+        if (!tokenValid() || !YT_SCOPES.every(s => grantedScopes.includes(s))) await getToken();
         await serial(async () => {
           cfg.fileId = await findFile();
           cfg.enabled = true; saveCfg();
           await pull();
         });
         connected = true; setSynced();
+        YT.pull();
       } catch (e) { handleError(e); if (!e.auth) toast(e.message); }
     }
 
@@ -1073,6 +1092,11 @@
 
     return {
       clientId,
+      youtubeGranted: () => tokenValid() && YT_SCOPES.every(s => grantedScopes.includes(s)),
+      async getJson(url) {
+        if (!tokenValid()) throw Object.assign(new Error('Google session expired.'), { auth: true });
+        return (await api(url)).json();
+      },
       setClientId(id) { cfg.clientId = id; saveCfg(); },
       isEnabled: () => cfg.enabled,
       isConnected: () => connected,
@@ -1102,6 +1126,7 @@
       async onFocus() {
         if (!connected || !tokenValid() || writeTimer) return;
         await serial(() => pull().catch(handleError));
+        YT.pull(); // picks up a new day if the tab stayed open overnight
       },
       disconnect() {
         if (token && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(token, () => {});
@@ -1116,6 +1141,139 @@
         if (location.protocol !== 'file:') loadGis().catch(() => {});
       },
     };
+  })();
+
+  /* ---------- YouTube stats (Data API + Analytics backfill) ---------- */
+  const YT = (() => {
+    const DATA = 'https://www.googleapis.com/youtube/v3';
+    const ANALYTICS = 'https://youtubeanalytics.googleapis.com/v2/reports';
+    const AUTO = new Set(['youtube', 'analytics']);
+    let busy = false, lastError = '';
+    const info = () => state.youtube || (state.youtube = {});
+    const addDays = (s, n) => { const d = parseDate(s); d.setDate(d.getDate() + n); return toDateStr(d); };
+    // The Data API truncates subscriber counts of 1,000+ to 3 significant figures.
+    function matchesRounded(exact, shown) {
+      if (shown < 1000) return exact === shown;
+      const p = Math.pow(10, Math.floor(Math.log10(shown)) - 2);
+      return Math.floor(exact / p) * p === shown;
+    }
+    function explain(e, api) {
+      const why = `${e.reason || ''} ${e.message || ''}`;
+      if (e.auth) return 'Google session expired. Click Refresh stats.';
+      if (e.status === 403 && /accessNotConfigured|SERVICE_DISABLED|has not been used|is disabled/i.test(why))
+        return `Turn on "${api}" in your Google Cloud project, then click Refresh stats.`;
+      if (e.status === 403 && /insufficient|ACCESS_TOKEN_SCOPE/i.test(why))
+        return 'YouTube access wasn\'t allowed. Click Refresh stats and tick the YouTube boxes when Google asks.';
+      return e.message;
+    }
+
+    async function uploadDates(playlistId) {
+      const dates = [];
+      let page = '';
+      do {
+        let j;
+        try {
+          j = await Sync.getJson(`${DATA}/playlistItems?part=contentDetails,status&maxResults=50&playlistId=${playlistId}${page ? '&pageToken=' + page : ''}`);
+        } catch (e) { if (e.status === 404) break; throw e; } // a brand-new channel may have no uploads playlist yet
+        for (const it of j.items || []) {
+          if (it.status?.privacyStatus === 'public' && it.contentDetails?.videoPublishedAt) dates.push(toDateStr(new Date(it.contentDetails.videoPublishedAt)));
+        }
+        page = j.nextPageToken || '';
+      } while (page);
+      return dates.sort();
+    }
+
+    // Daily running totals rebuilt from YouTube Analytics (exact, but 2–3 days behind).
+    async function history(channel) {
+      const start = channel.snippet.publishedAt.slice(0, 10);
+      const rep = await Sync.getJson(`${ANALYTICS}?ids=channel==MINE&startDate=${start}&endDate=${todayStr()}&metrics=views,subscribersGained,subscribersLost&dimensions=day&sort=day`);
+      const rows = rep.rows || [];
+      let uploads = [];
+      try { uploads = await uploadDates(channel.contentDetails.relatedPlaylists.uploads); } catch (e) { console.error(e); }
+      const firstActive = [rows.find(r => r[1] || r[2] || r[3])?.[0], uploads[0]].filter(Boolean).sort()[0];
+      if (!firstActive || !rows.length) return [];
+      const byDay = new Map(rows.map(r => [r[0], r]));
+      const lastDay = rows[rows.length - 1][0];
+      const out = [];
+      let subs = 0, views = 0, u = 0;
+      for (const r of rows) if (r[0] < firstActive) { views += r[1]; subs += r[2] - r[3]; }
+      for (let d = addDays(firstActive, -1); d <= lastDay; d = addDays(d, 1)) {
+        const r = byDay.get(d);
+        if (r && d >= firstActive) { views += r[1]; subs += r[2] - r[3]; }
+        while (u < uploads.length && uploads[u] <= d) u++;
+        out.push({ date: d, subs: Math.max(0, subs), views, videos: u });
+      }
+      return out;
+    }
+
+    // Auto entries are replaced on each pull; entries you typed in yourself are never touched.
+    function merge(hist, now) {
+      const today = todayStr();
+      const manualDays = new Set(state.stats.filter(s => !AUTO.has(s.source)).map(s => s.date));
+      const histDays = new Set(hist.map(h => h.date));
+      state.stats = state.stats.filter(s => !AUTO.has(s.source) || (s.date !== today && !histDays.has(s.date)));
+      for (const h of hist) {
+        if (h.date >= today || manualDays.has(h.date)) continue;
+        state.stats.push({ id: uid(), ...h, source: 'analytics' });
+      }
+      if (!manualDays.has(today)) {
+        // Newest exact count: from this pull's history, else from history saved by an earlier pull.
+        const latest = hist[hist.length - 1] ||
+          state.stats.filter(s => s.source === 'analytics' && s.date < today).sort((a, b) => a.date.localeCompare(b.date)).pop();
+        let subs = now.subs;
+        if (subs == null) subs = latest ? latest.subs : 0; // channel hides its subscriber count
+        else if (latest && subs >= 1000 && matchesRounded(latest.subs, subs)) subs = latest.subs;
+        state.stats.push({ id: uid(), date: today, subs, views: now.views, videos: now.videos, source: 'youtube' });
+      }
+    }
+
+    async function pull({ force = false } = {}) {
+      if (busy || !Sync.isConnected()) return;
+      if (!force && info().lastPull === todayStr()) return;
+      if (!Sync.youtubeGranted()) {
+        lastError = 'YouTube access wasn\'t allowed. Click Refresh stats and tick the YouTube boxes when Google asks.';
+        render(); return;
+      }
+      busy = true; lastError = ''; render();
+      try {
+        let channel;
+        try {
+          channel = (await Sync.getJson(`${DATA}/channels?part=snippet,statistics,contentDetails&mine=true`)).items?.[0];
+        } catch (e) { throw new Error(explain(e, 'YouTube Data API v3')); }
+        if (!channel) throw new Error('This Google account has no YouTube channel. When Google asks, pick the account (or Brand Account) that owns the channel.');
+        const st = channel.statistics;
+        const now = { subs: st.hiddenSubscriberCount ? null : Number(st.subscriberCount), views: Number(st.viewCount), videos: Number(st.videoCount) };
+        let hist = [];
+        try { hist = await history(channel); } catch (e) { console.error(e); lastError = 'Today\'s numbers updated, but past history couldn\'t load: ' + explain(e, 'YouTube Analytics API'); }
+        merge(hist, now);
+        Object.assign(info(), { channelId: channel.id, title: channel.snippet.title, lastPull: todayStr(), lastPullAt: Date.now() });
+        save(); renderStats(); renderKpis();
+        toast(hist.length ? `Stats updated · ${hist.length} days of history` : 'Stats updated from YouTube');
+      } catch (e) {
+        console.error(e); lastError = e.message;
+      } finally { busy = false; render(); }
+    }
+
+    function render() {
+      const y = state.youtube || {};
+      $('ytRefresh').disabled = busy;
+      $('ytRefresh').textContent = busy ? 'Updating…' : 'Refresh stats';
+      if (busy) $('ytInfo').textContent = 'Pulling stats from YouTube…';
+      else if (y.lastPullAt) {
+        const d = new Date(y.lastPullAt);
+        const when = toDateStr(d) === todayStr() ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : fmtDate(toDateStr(d), { month: 'short', day: 'numeric' });
+        $('ytInfo').textContent = `Auto from YouTube · ${y.title || 'your channel'} · updated ${when}`;
+      } else $('ytInfo').textContent = 'Stats can update automatically from YouTube';
+      $('ytNote').textContent = lastError;
+      $('ytNote').style.display = lastError ? '' : 'none';
+    }
+
+    $('ytRefresh').addEventListener('click', async () => {
+      if (!Sync.isConnected() || !Sync.youtubeGranted()) await Sync.connect();
+      pull({ force: true });
+    });
+
+    return { pull, render, isAuto: s => AUTO.has(s.source) };
   })();
 
   function openSyncDialog() {
